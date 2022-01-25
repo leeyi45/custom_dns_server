@@ -1,4 +1,4 @@
-# private_dns
+# custom_dns_server
 
 A DNS server written in python primarily using ```scapy```. This server is intended to replace your computer's main DNS server, giving you the ability to decide which DNS server to use for certain domains.
 
