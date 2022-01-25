@@ -1,4 +1,4 @@
-# private_dns
+# custom_dns_server
 
 A DNS server written in python primarily using ```scapy```. This server is intended to replace your computer's main DNS server, giving you the ability to decide which DNS server to use for certain domains.
 
@@ -8,7 +8,7 @@ Now your computer can perform a DNS lookup for `myvpn.me`, while the rest of you
 Alternatively, let's say that certain local domains are only accessible within the local network. You might want to resolve local domains using the local network's DNS server instead of your VPN server. Again, this server will provide you with the capability to redirect requests for the local domain to the local DNS server.
 
 # Instructions to Run
-After installing 'scapy' and 'pyyaml', simply run `python main.py` 
+After installing `scapy` and `pyyaml`, simply run `python main.py` 
 
 # Configuration
 All configuration options for this server is provided in the ```config.yml``` file. The sections below explain each configuration option.
