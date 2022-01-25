@@ -4,6 +4,7 @@ from scapy.layers.dns import DNS
 import socket
 import socketserver
 from typing import *
+import dns
 
 from yaml_helper import YamlHelper
 
@@ -23,22 +24,26 @@ class DNSServer(socketserver.UDPServer):
 
     class _RequestHandler(socketserver.DatagramRequestHandler):
         def handle(self):
+            data, reply_sock = self.request
+            client_addr = self.client_address
+
+            packet = dns.parse_dns(data)
+            requested_domain = packet['qn'][0].qname
+            logging.info(f"Received request from {client_addr[0]} for {requested_domain.decode()}")
+
             def recvfrom() -> bytes:
                 try:
                     return self.server._client_sock.recvfrom(512)[0]
                 except Exception as e:
                     logging.error(f"Exception: {e}", exc_info=e)
-                    return DNS(qr=1, rcode=2)
 
-            data, reply_sock = self.request
-            client_addr = self.client_address
-
-            packet = DNS(data)
-            logging.info(f"Received request from {client_addr[0]} for {packet.qd.qname.decode()}")
+                    reply = dict(packet)
+                    reply['rcode'] = dns.SERVFAIL
+                    return dns.format_dns(**reply)
 
             def server_generator():
                 for domain, servers in self.server.lookup_servers.items():
-                    if packet.qd.qname.endswith(domain):
+                    if requested_domain.endswith(domain):
                         for each in servers:
                             if each == "fallback":
                                 yield from self.server.fallback_servers
@@ -55,57 +60,8 @@ class DNSServer(socketserver.UDPServer):
                 except Exception as e:
                     logging.error(f"Request to {remote_server.exploded} failed: {e}")
                     continue
-                reply_sock.sendto(bytes(reply), client_addr)
+                reply_sock.sendto(reply, client_addr)
                 break
-
-
-def dns_parser(data: bytes) -> Dict[str, Any]:
-    """
-    Manual parser for a DNS message
-    """
-    # question, answer, authoritative, additional
-    sections = ["qn", "an", "aa", "ad"]
-    
-    packet = {
-        'trans_id': int.from_bytes(data[0:2], "big"),
-        'qr': data[2] & 0x80,
-        'opcode': data[2] & 0x78,
-        'aa': data[2] & 0x04, # 0b0000_0100
-        'tc': data[2] & 0x02,
-        'rd': data[2] & 0x01,
-        'ra': data[3] & 0x80,
-        'rcode': data[3] & 0x0F
-    }
-
-    index = 4
-    for section in sections:
-        packet[section + "len"] = int.from_bytes(data[index:index + 2], "big")
-        index += 2
-
-    for section in sections:
-        records = []
-
-        for _ in range(packet[section + "len"]):
-            domain_name = []
-
-            while True:
-                length = data[index]
-                if length == 0:
-                    records.append({
-                        'qname': b'.'.join(domain_name),
-                        'type': int.from_bytes(data[index + 1: index + 3], "big"),
-                        'class': int.from_bytes(data[index + 3 : index + 5], "big")
-                    })
-                    index += 4
-                    break
-                
-                index += 1
-                domain_name.append(data[index:index + length])
-                index += length
-
-        packet[section] = records
-    
-    return packet
 
 
 def get_resolvers(yaml_conf: YamlHelper) -> Dict[bytes, List[IPv4Address]]:

@@ -1,10 +1,11 @@
-from dhcp_handler import DHCPHandler
 import dns_handler
 from ipaddress import IPv4Address
 import logging
 from operator import attrgetter
 from typing import *
 import yaml
+
+import dhcp as dhcp
 from yaml_helper import YamlHelper
 
 
@@ -19,8 +20,7 @@ def get_fallbacks(yaml_conf: YamlHelper) -> List[IPv4Address]:
         if not yaml_conf.get_bool("dhcp-options/use-dhcp"):
             return []
         
-        dhcp = DHCPHandler(yaml_conf)
-        return dhcp.get_dhcp_options()['local_dns']
+        return dhcp.get_dhcp_options('addr????')[6]
     else:
         return list(map(IPv4Address, fallback_servers))
 
