@@ -17,14 +17,14 @@ class YamlHelper:
         
         return obj
 
-    def get_list(self, path: str, default=None) -> List[Any]:
+    def get_list(self, path: str) -> List[Any]:
         obj = self.get(path)
         if isinstance(obj, list):
             return obj
         elif obj is not None:
             return [obj]
         else:
-            return default
+            return []
 
     def get_bool(self, path: str, default: bool = False) -> bool:
         return bool(self.get(path, default))

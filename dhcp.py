@@ -1,15 +1,15 @@
 from ipaddress import IPv4Address
+import itertools
 import logging
 from operator import attrgetter
 import random
 import socket
+import platform
 from typing import *
 
-from scapy.all import conf, get_if_addr
+from scapy.arch import get_if_addr
+from scapy.config import conf
 from scapy.layers.dhcp import BOOTP, DHCP
-
-from dhcp.options import DHCP_MSG_TYPE, DHCP_PARAM_REQ, DHCP_SERV_ID, DOMAIN_NAME, DOMAIN_NAME_SERVER
-from dhcp.msg import DHCPDISCOVER, DHCPINFORM
 
 DHCP_MAGIC_COOKIE = b'\x63\x82\x53\x63'
 
@@ -103,42 +103,65 @@ def format_dhcp(opcode: bytes = b'\x01',
     return b''.join(data)
 
 
-def get_dhcp_options(dhcp_server: IPv4Address) -> Dict[str, Any]:
+def get_dhcp_options(dst_addr: IPv4Address, iface_name: str = None) -> Dict[str, Any]:
     """
     Try and contact a DHCP server with a DHCPINFORM to retrieve information about the local network
     
     If the DHCP server's IP address is already known, send the DHCPINFORM straight to it by giving it
     as the address
 
-    Otherwise give the global broadcast IP or the subnet broadcast IP
+    Otherwise give the global broadcast IP or the subnet broadcast IP, specifying which interface to use
     """
+    if not iface_name:
+        iface_name, iface_addr, _ = conf.route.route(dst_addr.exploded)
+    else:
+        if platform.system() == "Windows":
+            # Because Windows has to be different
+            from scapy.arch.windows import IFACES
+            iface_addr = get_if_addr(IFACES.dev_from_name(iface_name))
+        else:
+            iface_addr = get_if_addr(iface_name)
+    
+    logging.info(f"Selected {iface_name} with address {iface_addr} to send DHCP request")
 
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         sock.settimeout(10)
-        sock.bind(('10.249.37.192', 68))
+        sock.bind((iface_addr, 68))
 
-        transaction_id = random.randbytes(4) # generate a random transaction id
-        inform_msg = format_dhcp(
-            transaction_id=transaction_id,
-            options={
-            DHCP_MSG_TYPE: DHCPDISCOVER, # code for DHCPINFORM message
-            DHCP_PARAM_REQ: b'\x0F\x06' # request for domain and dns server
-        })
+        for _ in range(5):
+            # if the receive fails 5 times, try sending again
+            trans_id = random.randint(1, 4294967295)
+            inform_packet = BOOTP(xid=trans_id) / DHCP(options=[('message-type', 'inform'), ('param_req_list', 15, 6), 'end'])
+            sock.sendto(bytes(inform_packet), (dst_addr.exploded, 67))
 
-        sock.sendto(inform_msg, (dhcp_server.exploded, 67))
+            for _ in range(5):
+                # try to receive from the socket 5 times
+                try:
+                    reply_raw, relay_agent = sock.recvfrom(512)
+                    reply_packet = BOOTP(reply_raw)
 
-        reply_raw, relay_agent = sock.recvfrom(512)
-        logging.debug(f"{reply_raw} received from {relay_agent}")
+                    if reply_packet[BOOTP].xid == trans_id:
+                        # make sure that we're talking to the correct DHCP server
+                        # by checking the transaction id
+                        logging.debug(f"{reply_packet.show(dump=True)} received from {relay_agent}")
+                        break
+                except socket.timeout:
+                    continue
+            else:
+                continue
+            break
+        else:
+            # if sending fails to get any response 5 times, then raise this exception
+            raise Exception("Failed to get DHCP options!")
+        
+        reply_options = dict(map(lambda each: each if len(each) == 2 else (each[0], each[1:]), itertools.takewhile(lambda x: x != 'end', reply_packet[DHCP].options)))
 
-        reply_data = parse_dhcp(reply_raw)
-
-        dhcp_server_temp = IPv4Address(reply_data['options'][DHCP_SERV_ID])
+        dhcp_server_temp = IPv4Address(reply_options['server_id'])
         logging.info("Received DHCPACK from " + dhcp_server_temp.exploded)
 
-        local_domain = reply_data['options'][DOMAIN_NAME] # retrieve the local domain name
-        local_dns = reply_data['options'][DOMAIN_NAME_SERVER]     # retrieve the network's dns servers
-        local_dns = [IPv4Address(local_dns[i:i+4]) for i in range(0, len(local_dns), 4)]
+        local_domain = reply_options['domain']    # retrieve the local domain name
+        local_dns = list(map(IPv4Address, reply_options['name_server'])) # retrieve the network's dns servers
 
         logging.info(f"Options retrieved from {dhcp_server_temp.exploded}:\n\tLocal Domain: {local_domain.decode()}\n\tLocal DNS Servers: [{', '.join(map(attrgetter('exploded'), local_dns))}]")
 

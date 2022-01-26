@@ -34,7 +34,7 @@ For domains with no configured resolver, the server will query servers specified
 Use ```fallback``` in the list of domains to specify that the server should use the fallback servers to query for that domain.
 
 ## DHCP Configuration
-If a DHCP server is available on the network, you can configure the server to request DNS server information from it by sending a DHCPDISCOVER message.
+If a DHCP server is available on the network, you can configure the server to request DNS server information from it by sending a DHCPINFORM message.
 To activate this functionality, set the `use-dhcp` option to be `true`.
 
 ```yml
@@ -48,11 +48,8 @@ dhcp-options:
 ```
 
 ### ```use-network-broadcast```
-Set this to `true` to use the subnet's broadcast address when sending DHCPDISCOVER message instead of the universal broadcast address. For example, if the DHCP server is on the `192.168.10.0/24` network, setting this option to `true` will cause it to broadcast the DHCPDISCOVER message using `192.168.10.255` instead of `255.255.255.255`.
+Set this to `true` to use the subnet's broadcast address when sending DHCPDISCOVER message instead of the universal broadcast address. For example, if the DHCP server is on the `192.168.10.0/24` network, setting this option to `true` will cause it to broadcast the DHCPINFORM message using `192.168.10.255` instead of `255.255.255.255`.
 Turning this option will contain the server's DHCP packets to the local subnet, but may not work with networks that rely on DHCP relays
-
-### `send-decline`
-When a DHCP server receives a DHCPDISCOVER message, it will respond with a DHCPOFFER. Because the server isn't actually requesting for an IP address, this server can choose to reply with a DHCPDECLINE, informing the DHCP server that it is not requesting that IP address.
 
 ### `local-iface` and `local-addr`
 `local-iface` informs this server that the DHCP server should be reached using the given network interface, while `local-addr` informs this server that the DHCP server can be reached using the network interface with that specified local IP address. If neither of these options are given, then the interface returned by `scapy`'s `conf.iface` variable is used
@@ -60,7 +57,7 @@ When a DHCP server receives a DHCPDISCOVER message, it will respond with a DHCPO
 If both options are specified, then `local-iface` is ignored in favour of the value given by `local-addr`
 
 ### `dhcp-server` and `force-broadcast`
-If this option is specified, this server will send DHCPDISCOVER messages straight to the IP address provided instead of sending a broadcast message. `force-broadcast` overrides this option, forcing this server to always use broadcast messages when sending DHCPDISCOVER.
+If this option is specified, this server will send DHCPINFORM messages straight to the IP address provided instead of sending a broadcast message. `force-broadcast` overrides this option, forcing this server to always use broadcast messages when sending DHCPINFORM.
 
 ## DNS Server Configuration
 Configuration options pertaining to the DNS server
