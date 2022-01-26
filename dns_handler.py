@@ -1,10 +1,11 @@
 from ipaddress import AddressValueError, IPv4Address
 import logging
-from scapy.layers.dns import DNS
 import socket
 import socketserver
 from typing import *
-import dns
+from dns import DNSParser
+
+# from scapy.layers.dns import DNS
 
 from yaml_helper import YamlHelper
 
@@ -27,7 +28,7 @@ class DNSServer(socketserver.UDPServer):
             data, reply_sock = self.request
             client_addr = self.client_address
 
-            packet = dns.parse_dns(data)
+            packet = DNSParser(data).parse()
             requested_domain = packet['qn'][0].qname
             logging.info(f"Received request from {client_addr[0]} for {requested_domain.decode()}")
 
@@ -36,10 +37,7 @@ class DNSServer(socketserver.UDPServer):
                     return self.server._client_sock.recvfrom(512)[0]
                 except Exception as e:
                     logging.error(f"Exception: {e}", exc_info=e)
-
-                    reply = dict(packet)
-                    reply['rcode'] = dns.SERVFAIL
-                    return dns.format_dns(**reply)
+                    raise
 
             def server_generator():
                 for domain, servers in self.server.lookup_servers.items():

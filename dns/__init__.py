@@ -16,7 +16,7 @@ class QuestionRecord:
     """
     size field refers to the number of bytes it would take up stored in the regular DNS format
     """
-    def __init__(self, qname: Union[str, bytes], qtype: bytes, qclass: bytes, size: int):
+    def __init__(self, qname: Union[str, bytes], qtype: bytes, qclass: bytes):
         if isinstance(qname, str):
             qname = qname.encode()
 
@@ -24,10 +24,6 @@ class QuestionRecord:
         
         self.qtype = qtype
         self.qclass = qclass
-        self.size = size
-
-    def __len__(self) -> int:
-        return self.size
     
     @classmethod
     def from_bytes(cls, data: bytes) -> Tuple[Any, int]:
@@ -119,7 +115,6 @@ class AnswerRecord:
 
         return AnswerRecord(b'.'.join(domain_data), rtype, rclass, ttl, rdata), index
 
-
     def to_bytes(self) -> bytes:
         def yielder():
             for domain in self.rname.split(b'.'):
@@ -162,24 +157,138 @@ def format_dns(
     header_1 |= rcode
 
     data = [trans_id, header_0, header_1]
-    sections = [questions, answers, authority, additional]
+    sections = [answers, authority, additional]
 
     # append section lengths
+    data.append(len(questions).to_bytes(2, "big"))
+
     for section in sections:
         data.append(len(section).to_bytes(2, "big"))
+    
+    index = 12
+    domain_names = {}
+
+    for question in questions:
+        qname = question.qname
+        
+        if qname in domain_names:
+            for each in qname.split(b'.'):
+                data.append(len(each).to_bytes(1, "big"))
+                data.append(each)
+                index += 1 + len(each)
+            
+            data.append(b'\x00')
+            index += 1
+
+            domain_names[qname] = index
+        
+        data.append(int.to_bytes(question.qtype, 2, "big"))
+        data.append(int.to_bytes(question.qclass, 2, "big"))
 
     # then append sections
     for section in section:
         if not section:
             continue
         
-        # dns has a weird compression thing that idk how to do yet
-        # so uh
         for record in section:
-            rdata = record.to_bytes()
+            rname = record.rname
+
+
             data.append(rdata)
 
     return b''.join(data)
+
+
+class DNSParser:
+    data: bytes
+    domain_names: Dict[int, bytes]
+    index: int
+
+    def __init__(self, data: bytes) -> None:
+        self.data = data
+        self.domain_names = {}
+        self.index = 0
+
+    def _get_bytes(self, count: int) -> bytes:
+        value = self.data[self.index:self.index + count]
+        self.index += count
+        return value
+
+    def _get_int(self, count: int) -> int:
+        return int.from_bytes(self._get_bytes(count), "big")
+
+    def _get_domain(self) -> bytes:
+        domain_data = []
+
+        while self.index < len(self.data):
+            length = self._get_int(1)
+
+            if length == 0:
+                break
+            # elif length > 63:
+            #     # pointer
+            #     pointed_index = length & 0x3F # length value is last six bytes
+            else:
+                # domain pieces must not exceed 63 octets
+                domain_data.append(self._get_bytes(length))
+        
+        full_domain = b'.'.join(domain_data)
+        self.domain_names[self.index] = full_domain
+        return full_domain
+
+    def parse_header(self) -> Dict[str, int]:
+        header = {
+            'trans_id': self._get_int(2),
+            'qr': (self.data[self.index] & 0x80)     >> 7, # 0b1000_1000
+            'opcode': (self.data[self.index] & 0x78) >> 3, # 0b0111_1000
+            'aa': (self.data[self.index] & 0x04)     >> 2, # 0b0000_0100
+            'tc': self.data[self.index] & 0x02       >> 1, # 0b0000_0010
+            'rd': self.data[self.index] & 0x01,            # 0b0000_0001
+            'ra': self.data[self.index + 1] & 0x80   >> 7, # 0b1000_0000
+            'rcode': self.data[self.index + 1] & 0x0F      # 0b0000_1111
+        }
+
+        self.index += 2
+        return header
+
+
+    def parse(self) -> Dict[str, Any]:
+        # question, answer, authoritative, additional
+        sections = ["an", "aa", "ad"]
+        
+        packet = self.parse_header()
+        packet['qnlen'] = self._get_int(2)
+
+        for section in sections:
+            packet[section + "len"] = self._get_int(2)
+
+        # parse questions
+        packet['qn'] = []
+
+        for _ in range(packet['qnlen']):
+            domain_name = self._get_domain()
+            qtype = self._get_int(2)
+            qclass = self._get_int(2)
+
+            record = QuestionRecord(domain_name, qtype, qclass)
+            packet['qn'].append(record)
+
+        # parse other sections
+        for section in sections:
+            packet[section] = []
+
+            for _ in range(packet[section + "len"]):
+                domain_name = self._get_domain()
+                rtype = self._get_int(2)
+                rclass = self._get_int(2)
+                ttl = self._get_int(2)
+                rlength = self._get_int(2)
+                rdata = self._get_bytes(rlength)
+
+                record = AnswerRecord(domain_name, rtype, rclass, ttl, rdata)
+                packet[section].append(record)
+        
+        return packet
 
 
 def parse_dns(data: bytes) -> Dict[str, Any]:

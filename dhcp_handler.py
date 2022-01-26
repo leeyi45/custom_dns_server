@@ -2,7 +2,6 @@ from ipaddress import IPv4Address
 import logging
 from operator import attrgetter
 import random
-from scapy.all import conf, get_if_addr
 import socket
 from typing import *
 

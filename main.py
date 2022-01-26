@@ -20,7 +20,7 @@ def get_fallbacks(yaml_conf: YamlHelper) -> List[IPv4Address]:
         if not yaml_conf.get_bool("dhcp-options/use-dhcp"):
             return []
         
-        return dhcp.get_dhcp_options('addr????')[6]
+        return dhcp.get_dhcp_options(IPv4Address("255.255.255.255"))[6]
     else:
         return list(map(IPv4Address, fallback_servers))
 

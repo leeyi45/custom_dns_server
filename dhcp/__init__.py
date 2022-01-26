@@ -5,8 +5,11 @@ import random
 import socket
 from typing import *
 
+from scapy.all import conf, get_if_addr
+from scapy.layers.dhcp import BOOTP, DHCP
+
 from dhcp.options import DHCP_MSG_TYPE, DHCP_PARAM_REQ, DHCP_SERV_ID, DOMAIN_NAME, DOMAIN_NAME_SERVER
-from dhcp.msg import DHCPINFORM
+from dhcp.msg import DHCPDISCOVER, DHCPINFORM
 
 DHCP_MAGIC_COOKIE = b'\x63\x82\x53\x63'
 
@@ -87,7 +90,7 @@ def format_dhcp(opcode: bytes = b'\x01',
     if not transaction_id:
         transaction_id = random.randbytes(4)
     
-    data = [opcode, htype, hlen, hops, secs, flags, transaction_id, ciaddr.packed, yiaddr.packed, 
+    data = [opcode, htype, hlen, hops, transaction_id, secs, flags, ciaddr.packed, yiaddr.packed, 
             siaddr.packed, giaddr.packed, chaddr, sname, file, DHCP_MAGIC_COOKIE]
 
     if options:
@@ -113,13 +116,13 @@ def get_dhcp_options(dhcp_server: IPv4Address) -> Dict[str, Any]:
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         sock.settimeout(10)
-        sock.bind(('172.31.134.165', 68))
+        sock.bind(('10.249.37.192', 68))
 
         transaction_id = random.randbytes(4) # generate a random transaction id
         inform_msg = format_dhcp(
             transaction_id=transaction_id,
             options={
-            DHCP_MSG_TYPE: DHCPINFORM,    # code for DHCPINFORM message
+            DHCP_MSG_TYPE: DHCPDISCOVER, # code for DHCPINFORM message
             DHCP_PARAM_REQ: b'\x0F\x06' # request for domain and dns server
         })
 
