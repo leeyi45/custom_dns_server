@@ -1,3 +1,6 @@
+from ipaddress import IPV4LENGTH, IPV6LENGTH, IPv4Address, IPv6Address
+import random
+from tracemalloc import start
 from typing import *
 
 NOERROR = 0
@@ -10,6 +13,14 @@ REFUSED = 5
 QUERY = 0
 IQUERY = 1
 STATUS = 2
+
+A = 1
+NS = 2
+CNAME = 5
+SOA = 6
+PTR = 12
+MX = 15
+AAAA = 28
 
 
 class QuestionRecord:
@@ -24,6 +35,9 @@ class QuestionRecord:
         
         self.qtype = qtype
         self.qclass = qclass
+
+    def __repr__(self):
+        return f'<QuestionRecord: qname={self.qname.decode()}, qtype={self.qtype}, qclass={self.qclass}>'
     
     @classmethod
     def from_bytes(cls, data: bytes) -> Tuple[Any, int]:
@@ -78,6 +92,10 @@ class AnswerRecord:
         self.rclass = rclass
         self.ttl = ttl
         self.rdata = rdata
+    
+    def __repr__(self):
+        return f'<AnswerRecord: rname={self.rname}, rtype={self.rtype},' +\
+        f'rclass={self.rclass}, ttl={self.ttl}, rdata={self.rdata}>'
 
     @classmethod
     def from_bytes(cls, data: bytes) -> Tuple[Any, int]:
@@ -123,7 +141,7 @@ class AnswerRecord:
             yield b'\x00'
             yield self.rtype
             yield self.rclass
-            yield self.ttl.to_bytes(2, "big")
+            yield self.ttl.to_bytes(4, "big")
             yield len(self.rdata).to_bytes(2, "big")
             yield self.rdata
         
@@ -144,11 +162,14 @@ def format_dns(
         additional: List[AnswerRecord] = None
     ) -> bytes:
 
-    def flag_val(val: bytes, flag: bool):
+    def flag_val(val: bytes, flag: bool) -> int:
         return val if flag else 0
 
+    if not trans_id:
+        trans_id = random.randbytes(2)
+
     header_0 = flag_val(0x80, qr)
-    header_0 |= opcode << 3
+    header_0 |= (opcode << 3)
     header_0 |= flag_val(0x04, aa)
     header_0 |= flag_val(0x02, tc)
     header_0 |= flag_val(0x01, rd)
@@ -156,37 +177,44 @@ def format_dns(
     header_1 = flag_val(0x80, ra)
     header_1 |= rcode
 
-    data = [trans_id, header_0, header_1]
+    data = [trans_id, header_0.to_bytes(1, "big"), header_1.to_bytes(1, "big")]
     sections = [answers, authority, additional]
 
     # append section lengths
-    data.append(len(questions).to_bytes(2, "big"))
+    if questions:
+        data.append(len(questions).to_bytes(2, "big"))
+    else:
+        data.append(b'\x00\x00')
 
     for section in sections:
-        data.append(len(section).to_bytes(2, "big"))
+        if section:
+            data.append(len(section).to_bytes(2, "big"))
+        else:
+            data.append(b'\x00\x00')
     
     index = 12
     domain_names = {}
 
-    for question in questions:
-        qname = question.qname
-        
-        if qname in domain_names:
-            for each in qname.split(b'.'):
-                data.append(len(each).to_bytes(1, "big"))
-                data.append(each)
-                index += 1 + len(each)
+    if questions:
+        for question in questions:
+            qname = question.qname
             
-            data.append(b'\x00')
-            index += 1
+            if qname not in domain_names:
+                for each in qname.split(b'.'):
+                    data.append(len(each).to_bytes(1, "big"))
+                    data.append(each)
+                    index += 1 + len(each)
+                
+                data.append(b'\x00')
+                index += 1
 
-            domain_names[qname] = index
-        
-        data.append(int.to_bytes(question.qtype, 2, "big"))
-        data.append(int.to_bytes(question.qclass, 2, "big"))
+                # domain_names[qname] = index
+            
+            data.append(int.to_bytes(question.qtype, 2, "big"))
+            data.append(int.to_bytes(question.qclass, 2, "big"))
 
     # then append sections
-    for section in section:
+    for section in sections:
         if not section:
             continue
         
@@ -195,7 +223,6 @@ def format_dns(
 
 
             data.append(rdata)
-
     return b''.join(data)
 
 
@@ -209,32 +236,63 @@ class DNSParser:
         self.domain_names = {}
         self.index = 0
 
-    def _get_bytes(self, count: int) -> bytes:
+    def _get_bytes(self, count: int, increment: bool = True) -> bytes:
         value = self.data[self.index:self.index + count]
-        self.index += count
+
+        if increment:
+            self.index += count
         return value
 
-    def _get_int(self, count: int) -> int:
-        return int.from_bytes(self._get_bytes(count), "big")
+    def _get_int(self, count: int, increment: bool = True) -> int:
+        return int.from_bytes(self._get_bytes(count, increment), "big")
 
-    def _get_domain(self) -> bytes:
+    def _get_domain(self, start_index: int, ptr_mode: bool) -> bytes:
+        if start_index in self.domain_names:
+            return self.domain_names[start_index]
+
         domain_data = []
+        index = start_index
+        consumed = 0
 
-        while self.index < len(self.data):
-            length = self._get_int(1)
+        while index < len(self.data):
+            length = self.data[index]
+            index += 1
+            consumed += 1
 
-            if length == 0:
+            if (length & 0xC0):
+                # is a pointer
+                pointed_index = self.data[index]
+                consumed += 1
+                domain_data.append(self._get_domain(pointed_index, True))
                 break
-            # elif length > 63:
-            #     # pointer
-            #     pointed_index = length & 0x3F # length value is last six bytes
+            elif length == 0:
+                break
             else:
-                # domain pieces must not exceed 63 octets
-                domain_data.append(self._get_bytes(length))
+                domain_data.append(self.data[index:index + length])
+                index += length
+                consumed += length
+                continue
         
+        if not ptr_mode:
+            self.index += consumed
+
         full_domain = b'.'.join(domain_data)
-        self.domain_names[self.index] = full_domain
+        self.domain_names[start_index] = full_domain
         return full_domain
+
+    def _get_rdata(self, rtype: int, rdata: bytes) -> Any:
+        def parser(data: bytes) -> bytes:
+            return self._get_domain(self.index, True)
+
+        parsers = {
+            A: IPv4Address,
+            AAAA: IPv6Address,
+            MX: parser,
+            NS: parser,
+            CNAME: parser
+        }
+
+        return parsers.get(rtype, lambda x: x)(rdata)
 
     def parse_header(self) -> Dict[str, int]:
         header = {
@@ -251,10 +309,9 @@ class DNSParser:
         self.index += 2
         return header
 
-
     def parse(self) -> Dict[str, Any]:
         # question, answer, authoritative, additional
-        sections = ["an", "aa", "ad"]
+        sections = ["an", "aa_sec", "ad"]
         
         packet = self.parse_header()
         packet['qnlen'] = self._get_int(2)
@@ -266,7 +323,10 @@ class DNSParser:
         packet['qn'] = []
 
         for _ in range(packet['qnlen']):
-            domain_name = self._get_domain()
+            # print(f'{self.index}, {self.data[self.index:self.index + 2]}')
+            domain_name = self._get_domain(self.index, False)
+            # print(self.index)
+
             qtype = self._get_int(2)
             qclass = self._get_int(2)
 
@@ -278,16 +338,20 @@ class DNSParser:
             packet[section] = []
 
             for _ in range(packet[section + "len"]):
-                domain_name = self._get_domain()
+
+                # print(f'{self.index}, {self.data[self.index:self.index + 2]}')
+                domain_name = self._get_domain(self.index, False)
+                # print(self.index)
+
                 rtype = self._get_int(2)
                 rclass = self._get_int(2)
-                ttl = self._get_int(2)
+                ttl = self._get_int(4)
                 rlength = self._get_int(2)
-                rdata = self._get_bytes(rlength)
+                rdata = self._get_rdata(rtype, self._get_bytes(rlength))
 
                 record = AnswerRecord(domain_name, rtype, rclass, ttl, rdata)
                 packet[section].append(record)
-        
+
         return packet
 
 

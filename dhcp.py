@@ -18,21 +18,24 @@ def parse_dhcp(data: bytes) -> Dict[str, Any]:
     """
     Parse a DHCP reply
     """
+    def to_int(val):
+        return int.from_bytes(val, "big")
+
     fields = {
-        'opcode': (1, None),        
-        'htype': (1, None),
-        'hlen':  (1, None),
-        'hops':  (1, None),
-        'transaction_id': (4, None),
-        'secs': (2, None),
-        'flags': (2, None),
+        'opcode': (1, to_int),        
+        'htype':  (1, to_int),
+        'hlen':   (1, to_int),
+        'hops':   (1, to_int),
+        'trans_id': (4, None),
+        'secs':   (2, None),
+        'flags':  (2, None),
         'ciaddr': (4, IPv4Address),
         'yiaddr': (4, IPv4Address),
         'siaddr': (4, IPv4Address),
         'giaddr': (4, IPv4Address),
         'chaddr': (16, None),
-        'sname': (64, None),
-        'file': (128, None)
+        'sname':  (64, None),
+        'file':   (128, None)
     }
 
     packet = {}
@@ -72,10 +75,10 @@ def parse_dhcp(data: bytes) -> Dict[str, Any]:
 def format_dhcp(opcode: bytes = b'\x01', 
                 htype: bytes  = b'\x01', 
                 hlen: bytes   = b'\x06', 
-                hops: bytes  = b'\x00',
-                transaction_id: bytes = None, 
-                secs: bytes  = b'\x00\x00',
-                flags: bytes = b'\x00\x00', 
+                hops: bytes   = b'\x00',
+                trans_id: bytes = None, 
+                secs: bytes   = b'\x00\x00',
+                flags: bytes  = b'\x00\x00', 
                 ciaddr: IPv4Address = IPv4Address('0.0.0.0'), 
                 yiaddr: IPv4Address = IPv4Address('0.0.0.0'), 
                 siaddr: IPv4Address = IPv4Address('0.0.0.0'), 
@@ -87,10 +90,10 @@ def format_dhcp(opcode: bytes = b'\x01',
     """
     Format a DHCP message
     """
-    if not transaction_id:
-        transaction_id = random.randbytes(4)
+    if not trans_id:
+        trans_id = random.randbytes(4)
     
-    data = [opcode, htype, hlen, hops, transaction_id, secs, flags, ciaddr.packed, yiaddr.packed, 
+    data = [opcode, htype, hlen, hops, trans_id, secs, flags, ciaddr.packed, yiaddr.packed, 
             siaddr.packed, giaddr.packed, chaddr, sname, file, DHCP_MAGIC_COOKIE]
 
     if options:
@@ -134,6 +137,7 @@ def get_dhcp_options(dst_addr: IPv4Address, iface_name: str = None) -> Dict[str,
             trans_id = random.randint(1, 4294967295)
             inform_packet = BOOTP(xid=trans_id) / DHCP(options=[('message-type', 'inform'), ('param_req_list', 15, 6), 'end'])
             sock.sendto(bytes(inform_packet), (dst_addr.exploded, 67))
+            logging.debug(f"Sent DHCPINFORM to {dst_addr.exploded}")
 
             for _ in range(5):
                 # try to receive from the socket 5 times

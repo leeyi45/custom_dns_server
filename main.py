@@ -1,3 +1,5 @@
+import argparse
+from ast import arguments
 from ipaddress import AddressValueError, IPv4Address
 import logging
 from operator import attrgetter, itemgetter
@@ -20,7 +22,7 @@ def get_dhcp_info(yaml_conf: YamlHelper) -> Dict[str, Any]:
     """
 
     if yaml_conf.get_bool("dhcp-options/use-dhcp"):
-        return dhcp.get_dhcp_options(IPv4Address("255.255.255.255"), "Ethernet")
+        return dhcp.get_dhcp_options(IPv4Address("255.255.255.255"), yaml_conf.get("dhcp-options/interface"))
     else:
         return {
             'local_dns': [],
@@ -93,6 +95,14 @@ def get_dns_server(yaml_conf: YamlHelper) -> DNSServer:
     return DNSServer(server_address, fallback_servers=fallback_servers, lookup_servers=lookup_servers)
 
 
+def parse_arguments(arguments=None):
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("-v", "--verbose", help="Activate more verbose logging", action="store_true", dest="verbose", default=False)
+
+    return parser.parse_args(arguments)
+
+
 def main():
     with open("config.yml") as file:
         yaml_conf = YamlHelper(yaml.safe_load(file))
@@ -104,5 +114,7 @@ def main():
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="[%(asctime)s %(levelname)s]: %(message)s", datefmt="%H:%M")
+    arguments = parse_arguments()
+    log_level = logging.DEBUG if arguments.verbose else logging.INFO
+    logging.basicConfig(level=log_level, format="[%(asctime)s %(levelname)s]: %(message)s", datefmt="%H:%M")
     main()
