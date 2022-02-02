@@ -236,15 +236,11 @@ class DNSParser:
         self.domain_names = {}
         self.index = 0
 
-    def _get_bytes(self, count: int, increment: bool = True) -> bytes:
-        value = self.data[self.index:self.index + count]
+    def _get_bytes(self, count: int) -> bytes:
+        return self.data[self.index:self.index + count]
 
-        if increment:
-            self.index += count
-        return value
-
-    def _get_int(self, count: int, increment: bool = True) -> int:
-        return int.from_bytes(self._get_bytes(count, increment), "big")
+    def _get_int(self, count: int) -> int:
+        return int.from_bytes(self._get_bytes(count), "big")
 
     def _get_domain(self, start_index: int, ptr_mode: bool) -> bytes:
         if start_index in self.domain_names:
@@ -252,17 +248,15 @@ class DNSParser:
 
         domain_data = []
         index = start_index
-        consumed = 0
 
         while index < len(self.data):
             length = self.data[index]
             index += 1
-            consumed += 1
 
             if (length & 0xC0):
                 # is a pointer
-                pointed_index = self.data[index]
-                consumed += 1
+                pointed_index = (int.from_bytes(self.data[index - 1: index + 1], "big") & 0x3FFF)
+                index += 1
                 domain_data.append(self._get_domain(pointed_index, True))
                 break
             elif length == 0:
@@ -270,14 +264,13 @@ class DNSParser:
             else:
                 domain_data.append(self.data[index:index + length])
                 index += length
-                consumed += length
                 continue
         
-        if not ptr_mode:
-            self.index += consumed
-
         full_domain = b'.'.join(domain_data)
-        self.domain_names[start_index] = full_domain
+        if not ptr_mode:
+            self.index = index
+            self.domain_names[start_index] = full_domain
+
         return full_domain
 
     def _get_rdata(self, rtype: int, rdata: bytes) -> Any:
@@ -297,7 +290,7 @@ class DNSParser:
     def parse_header(self) -> Dict[str, int]:
         header = {
             'trans_id': self._get_int(2),
-            'qr': (self.data[self.index] & 0x80)     >> 7, # 0b1000_1000
+            'qr': (self.data[self.index] & 0x80)     >> 7, # 0b1000_0000
             'opcode': (self.data[self.index] & 0x78) >> 3, # 0b0111_1000
             'aa': (self.data[self.index] & 0x04)     >> 2, # 0b0000_0100
             'tc': self.data[self.index] & 0x02       >> 1, # 0b0000_0010
@@ -311,16 +304,17 @@ class DNSParser:
 
     def parse(self) -> Dict[str, Any]:
         # question, answer, authoritative, additional
-        sections = ["an", "aa_sec", "ad"]
+        sections = ["an", "aa", "ad"]
         
         packet = self.parse_header()
+        packet['sections'] = {}
         packet['qnlen'] = self._get_int(2)
 
         for section in sections:
             packet[section + "len"] = self._get_int(2)
 
         # parse questions
-        packet['qn'] = []
+        packet['sections']['qn'] = []
 
         for _ in range(packet['qnlen']):
             # print(f'{self.index}, {self.data[self.index:self.index + 2]}')
@@ -331,11 +325,11 @@ class DNSParser:
             qclass = self._get_int(2)
 
             record = QuestionRecord(domain_name, qtype, qclass)
-            packet['qn'].append(record)
+            packet['sections']['qn'].append(record)
 
         # parse other sections
         for section in sections:
-            packet[section] = []
+            packet['sections'][section] = []
 
             for _ in range(packet[section + "len"]):
 
@@ -350,51 +344,6 @@ class DNSParser:
                 rdata = self._get_rdata(rtype, self._get_bytes(rlength))
 
                 record = AnswerRecord(domain_name, rtype, rclass, ttl, rdata)
-                packet[section].append(record)
+                packet['sections'][section].append(record)
 
         return packet
-
-
-def parse_dns(data: bytes) -> Dict[str, Any]:
-    """
-    Parse a DNS message
-    """
-    # question, answer, authoritative, additional
-    sections = ["an", "aa", "ad"]
-    
-    packet = {
-        'trans_id': int.from_bytes(data[0:2], "big"),
-        'qr': data[2] & 0x80,
-        'opcode': data[2] & 0x78,
-        'aa': data[2] & 0x04, # 0b0000_0100
-        'tc': data[2] & 0x02,
-        'rd': data[2] & 0x01,
-        'ra': data[3] & 0x80,
-        'rcode': data[3] & 0x0F
-    }
-
-    packet['qnlen'] = int.from_bytes(data[4:6], "big")
-
-    index = 6
-    for section in sections:
-        packet[section + "len"] = int.from_bytes(data[index:index + 2], "big")
-        index += 2
-
-    # parse questions
-    packet['qn'] = []
-
-    for _ in range(packet['qnlen']):
-        record, size = QuestionRecord.from_bytes(data[index:])
-        index += size
-        packet['qn'].append(record)
-
-    # parse other sections
-    for section in sections:
-        packet[section] = []
-
-        for _ in range(packet[section + "len"]):
-            record, size = AnswerRecord.from_bytes(data[index:])
-            index += size
-            packet[section].append(record)
-    
-    return packet
